@@ -6,8 +6,6 @@
  * Date Created:    02-26-2022
  * Last Updated:    04-22-2022
  *
- * TO DO: I2C
- *
  * Summary:
  *  Main source program file, implementing new scheduling
  *  techniques, and properly interfacing with peripherals.
@@ -32,6 +30,7 @@
  *
  * PINOUT
  * ======
+ * ( CAN BE ALTERED AT DISCRETION OF HARDWARE SUBSYSTEM )
  * [See MSP430f552x Mixed-Signal uC datasheet (rev.P)]
  *
  * P3.0     - UCB0SIMO      (I2C SDA)
@@ -72,10 +71,11 @@
 /*      MACROS          */
 
 /* GLOBAL VARIABLES     */
-volatile        char        EXG_CPLT, ACL_CPLT, ACL_ADDR;
-static volatile char        DAT_PKT[EXGn + ACLn];    // 2-byte packet (Front-end IC) + 6-byte packet (SPI)
+volatile        char    EXG_CPLT, ACL_CPLT, ACL_ADDR;
+static volatile char    DAT_PKT[EXGn + ACLn];    // 2-byte packet (Front-end IC) + 6-byte packet (SPI)
                                                     // = 8-byte packet
-
+    /* Demo Structures */
+volatile        char    RAND_PKT[8] = {0};    
 
 /* FUNCTION PROTOTYPES  */
 void Init_SYS   ( void );
@@ -107,6 +107,8 @@ void I2C_control_recv   ( uint8_t start_addr );
  *
  *  Notes:
  *      - Architecture is 16-bit, so int will be an 16-bit value (WORD)
+ *      - Any returns are an indication of catastrophic failure
+ *      - All data manipulations are handled by DMA and ISRs
  */
 int main( void )
 {
@@ -119,14 +121,12 @@ int main( void )
     Init_uSCI();    // UART, I2C
     Init_DMA();     // I2C DMA
 
-
-
     /* Interrupt every ~1 ms */
     TA0CCR0 = (uint16_t) (TMR_PERIOD-1);    // Start timer count up
 
     __low_power_mode_3();   // Enables interrupts and enter LPM3
 
-    while(1);
+    while(1);               // Infinite Loop
 
     return EXIT_FAILURE;    // If we got here, something TERRIBLE has happened
 }
@@ -170,7 +170,8 @@ void Init_SYS( void )
     UCSCTL4 |= SELA_0;              // ACLK using XT1CLK
     UCSCTL5 |= DIVPA_0 | DIVA_0;    // ACLK/1 = ACLK
 
-    EXG_CPLT = ACL_CPLT = 0;        // Interrupt Flags
+    EXG_CPLT = 0;
+    ACL_CPLT = 0;        // Interrupt Flags
 
     return;
 }
@@ -196,16 +197,16 @@ void Init_SYS( void )
  */
 void Init_TMR( void )
 {
-    TA0CCR0 = 0;
+    TA0CCR0 = 0;                        // No special configs
     TA0CTL  |= TASSEL_1 | MC_1 | TAIE;  // Setup ACLK
 
     return;
 }
 
-/*
- * TMR ISR
- *
- */
+
+//======================================================================
+// TIMER INTERRUPT SERVICE ROUTINE
+//======================================================================
 #pragma vector = TIMER0_A1_VECTOR
 __interrupt void TMR_ISR( void )
 {
@@ -221,11 +222,6 @@ __interrupt void TMR_ISR( void )
         }
         P4OUT   ^= BIT7;    // LED2 OFF
         EXG_CPLT = ACL_CPLT = 0;
-    }
-    else if (ACL_CPLT)
-    {
-        P4OUT   ^= BIT7;    // LED2 Toggle
-        ACL_CPLT = 0;
     }
 }
 
@@ -247,31 +243,11 @@ __interrupt void TMR_ISR( void )
  *      Init_IO();
  *
  *  Notes:
- *      PINOUT
- *      ======
- * [See MSP430f552x Mixed-Signal uC datasheet (rev.P)]
- *
- * P3.0     - UCB0SIMO      (I2C SDA)
- * P3.1     - UCB0SCLK      (I2C SCLK)
- *
- * P3.3     - UCA0TXD       (UART TX)
- *
- * P1.0     - EXGCLK            (ExG Clk. src.)
- * P1.1     - EXGIFG            (ExG Interrupt)
- * P6.2-6.0 - EXG_DATA[0:2]-+   (ExG Data)
- * P2.6-2.0 - EXG_DATA[3:9]-+
- *
- *+========================== EXG LAYOUT ===================================+
- *|   CLK [1]    INT [1]                DATA [10]                           ||
- *| +-------------------------------------------------------------------+   ||
- *| | D6(P1.0) | D2(P1.1) |  E3 - E0 (P6.2-0,P2.6), C5 - C0 (P2.5-0)    |   ||
- *| +-------------------------------------------------------------------+   ||
- *+=========================================================================+|
- *
+ *      - SEE PINOUT
  */
 void Init_IO( void )
 {
-    P4DIR   |= BIT7;    // LED
+    P4DIR   |= BIT7;        // LED
     P4OUT   &= ~BIT7;
 
     /* UART TX */
@@ -296,10 +272,9 @@ void Init_IO( void )
     return;
 }
 
-/*
- * ExG ISR
- *
- */
+//======================================================================
+// I/O (ExG) INTERRUPT SERVICE ROUTINE
+//======================================================================
 #pragma vector = PORT1_VECTOR
 __interrupt void ExG_ISR( void )
 {
@@ -441,10 +416,9 @@ void I2C_control_recv( uint8_t start_addr )
 }
 
 
-/*
- * I2C ISR                                              // TO DO: Fix
- *
- */
+//======================================================================
+// I2C INTERRUPT SERVICE ROUTINE
+//======================================================================
 #pragma vector = USCI_B0_VECTOR
 __interrupt void I2C_uSCI_ISR( void )
 {
@@ -490,9 +464,9 @@ void Init_DMA( void )
     DMA0CTL     |= DMAEN;
 }
 
-/*
- * DMA ISR
- */
+//======================================================================
+// DMA INTERRUPT SERVICE ROUTINE
+//======================================================================
 #pragma vector = DMA_VECTOR
 __interrupt void DMA_ISR( void )
 {
